@@ -1,0 +1,53 @@
+{
+  "name": "leetlogger",
+  "version": "1.0.0",
+  "description": "Robust Chrome Extension and Framework for logging LeetCode & competitive programming submissions to GitHub",
+  "main": "dist/background.js",
+  "type": "module",
+  "scripts": {
+    "dev": "webpack --mode=development --watch",
+    "build": "webpack --mode=production",
+    "test": "jest",
+    "lint": "eslint src --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,html}\""
+  },
+  "keywords": [
+    "leetcode",
+    "chrome-extension",
+    "github",
+    "competitive-programming",
+    "react",
+    "typescript",
+    "manifest-v3"
+  ],
+  "author": "Inkesk",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.9",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^7.14.1",
+    "@typescript-eslint/parser": "^7.14.1",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.2",
+    "dotenv": "^16.4.5",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "html-webpack-plugin": "^5.6.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.2",
+    "style-loader": "^4.0.0",
+    "ts-jest": "^29.1.5",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.5.2",
+    "webpack": "^5.92.1",
+    "webpack-cli": "^5.1.4"
+  }
+}
