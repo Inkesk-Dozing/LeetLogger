@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "LeetLogger",
+  "version": "1.0.0",
+  "description": "Automatically capture, format, and commit your LeetCode and GeeksforGeeks solutions to GitHub with historical catch-up support.",
+  "homepage_url": "https://github.com/Inkesk-Dozing/LeetLogger",
+  "author": "Inkesk",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "webNavigation",
+    "tabs",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://leetcode.com/*",
+    "https://practice.geeksforgeeks.org/*",
+    "https://api.github.com/*",
+    "https://github.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LeetLogger - Submission Sync Dashboard",
+    "default_icon": "assets/icon48.png"
+  },
+  "options_page": "welcome.html",
+  "icons": {
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://leetcode.com/problems/*",
+        "https://leetcode.com/submissions/*"
+      ],
+      "js": ["leetcodeContent.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://practice.geeksforgeeks.org/problems/*"
+      ],
+      "js": ["gfgContent.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://github.com/*"
+      ],
+      "js": ["githubAuthorize.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
