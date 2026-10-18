@@ -15,6 +15,51 @@ export class LeetCodeHistoricalFetcher {
     });
   }
 
+  private static async sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Dispatches LeetCode GraphQL queries with automatic exponential backoff for HTTP 429 rate limits.
+   */
+  private static async postGraphQLWithRetry(query: string, variables: any, retries = 3): Promise<any> {
+    const csrfToken = await this.getCsrfToken();
+    let delay = 1200;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const res: Response = await fetch(this.LEETCODE_GRAPHQL_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-csrftoken': csrfToken,
+            'Referer': 'https://leetcode.com',
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+
+        if (res.status === 429) {
+          const jitter = Math.floor(Math.random() * 500);
+          console.warn(`[LeetCode Historical] Rate limit (429) encountered. Backing off ${delay + jitter}ms (attempt ${attempt}/${retries})...`);
+          await this.sleep(delay + jitter);
+          delay *= 2;
+          continue;
+        }
+
+        if (res.ok) {
+          return await res.json();
+        }
+
+        console.warn(`[LeetCode Historical] GraphQL request returned HTTP ${res.status}: ${res.statusText}`);
+      } catch (err) {
+        if (attempt === retries) throw err;
+        await this.sleep(delay);
+        delay *= 1.5;
+      }
+    }
+    return null;
+  }
+
   /**
    * Fetches user's past accepted LeetCode submissions using LeetCode GraphQL API.
    * Leverages problemsetQuestionList filtered by status='AC' to find ALL solved problems,
@@ -22,7 +67,6 @@ export class LeetCodeHistoricalFetcher {
    */
   public static async fetchSubmissionHistory(limit = 100): Promise<ISubmissionPayload[]> {
     try {
-      const csrfToken = await this.getCsrfToken();
       let skip = 0;
       let hasMore = true;
       const solvedQuestions: any[] = [];
@@ -31,49 +75,37 @@ export class LeetCodeHistoricalFetcher {
 
       // 1. Fetch all solved questions metadata
       while (hasMore) {
-        const res: Response = await fetch(this.LEETCODE_GRAPHQL_ENDPOINT, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-csrftoken': csrfToken,
-            'Referer': 'https://leetcode.com',
-          },
-          body: JSON.stringify({
-            query: `
-              query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
-                problemsetQuestionList: questionList(
-                  categorySlug: $categorySlug
-                  limit: $limit
-                  skip: $skip
-                  filters: $filters
-                ) {
-                  total: totalNum
-                  questions: data {
-                    questionId
-                    title
-                    titleSlug
-                    difficulty
-                    topicTags {
-                      name
-                    }
-                  }
+        const query = `
+          query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
+            problemsetQuestionList: questionList(
+              categorySlug: $categorySlug
+              limit: $limit
+              skip: $skip
+              filters: $filters
+            ) {
+              total: totalNum
+              questions: data {
+                questionId
+                title
+                titleSlug
+                difficulty
+                topicTags {
+                  name
                 }
               }
-            `,
-            variables: {
-              categorySlug: '',
-              limit: 100,
-              skip,
-              filters: { status: 'AC' },
-            },
-          }),
-        });
+            }
+          }
+        `;
+        const variables = {
+          categorySlug: '',
+          limit: 100,
+          skip,
+          filters: { status: 'AC' },
+        };
 
-        if (!res.ok) {
-          throw new Error(`LeetCode GraphQL error: ${res.statusText}`);
-        }
+        const data = await this.postGraphQLWithRetry(query, variables);
+        if (!data) break;
 
-        const data: any = await res.json();
         const listData = data.data?.problemsetQuestionList;
         if (!listData || !listData.questions) {
           break;
@@ -82,12 +114,15 @@ export class LeetCodeHistoricalFetcher {
         solvedQuestions.push(...listData.questions);
         hasMore = solvedQuestions.length < listData.total && listData.questions.length > 0;
         skip += 100;
+
+        // Pacing delay between pagination pages
+        await this.sleep(150);
       }
 
-      console.log(`[LeetCode Historical] Found ${solvedQuestions.length} solved problems in profile stats. Fetching submission details in batches...`);
+      console.log(`[LeetCode Historical] Found ${solvedQuestions.length} solved problems in profile stats. Fetching submission details with controlled concurrency...`);
 
-      // 2. Fetch submissions details in concurrent batches of 20
-      const BATCH_SIZE = 20;
+      // 2. Fetch submissions details in controlled batches of 4 with randomized jitter to prevent rate limits
+      const BATCH_SIZE = 4;
       const payloads: ISubmissionPayload[] = [];
 
       for (let i = 0; i < solvedQuestions.length; i += BATCH_SIZE) {
@@ -125,6 +160,8 @@ export class LeetCodeHistoricalFetcher {
                     timestamp: ac.timestamp * 1000,
                   });
                 }
+                // Micro-jitter between detailed payload lookups
+                await this.sleep(60);
               }
               return detailedPayloads;
             } catch (e) {
@@ -139,6 +176,9 @@ export class LeetCodeHistoricalFetcher {
             payloads.push(...list);
           }
         }
+
+        // Randomized pacing delay between question batches
+        await this.sleep(180 + Math.floor(Math.random() * 120));
       }
 
       console.log(`[LeetCode Historical] Successfully processed details for ${payloads.length} total language solutions.`);
@@ -169,22 +209,8 @@ export class LeetCodeHistoricalFetcher {
     `;
 
     try {
-      const csrfToken = await this.getCsrfToken();
-      const res: Response = await fetch(this.LEETCODE_GRAPHQL_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-csrftoken': csrfToken,
-          'Referer': 'https://leetcode.com',
-        },
-        body: JSON.stringify({
-          query,
-          variables: { offset: 0, limit: 100, questionSlug: titleSlug },
-        }),
-      });
-
-      if (res.ok) {
-        const data: any = await res.json();
+      const data = await this.postGraphQLWithRetry(query, { offset: 0, limit: 100, questionSlug: titleSlug });
+      if (data) {
         const list = data.data?.submissionList?.submissions || [];
         
         const uniqueLangACs: Record<string, any> = {};
@@ -238,22 +264,8 @@ export class LeetCodeHistoricalFetcher {
     `;
 
     try {
-      const csrfToken = await this.getCsrfToken();
-      const res: Response = await fetch(this.LEETCODE_GRAPHQL_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-csrftoken': csrfToken,
-          'Referer': 'https://leetcode.com',
-        },
-        body: JSON.stringify({
-          query,
-          variables: { submissionId: parseInt(submissionId, 10) },
-        }),
-      });
-
-      if (res.ok) {
-        const data: any = await res.json();
+      const data = await this.postGraphQLWithRetry(query, { submissionId: parseInt(submissionId, 10) });
+      if (data) {
         const details = data.data?.submissionDetails;
         if (details) {
           return {

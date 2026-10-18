@@ -25,3 +25,26 @@ export interface ICommitResult {
   commitUrl?: string;
   error?: string;
 }
+
+export interface IBatchCommitItem {
+  files: ICommitFile[];
+  message: string;
+  authorTimestamp?: string;
+  metadata?: {
+    platform: string;
+    titleSlug: string;
+    problemId: string;
+    title: string;
+    difficulty: string;
+    topics: string[];
+  };
+}
+
+export interface IBatchCommitResult {
+  success: boolean;
+  totalItems: number;
+  committedCount: number;
+  finalCommitSha?: string;
+  error?: string;
+}
+
