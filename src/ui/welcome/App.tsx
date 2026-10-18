@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StorageManager } from '../../core/storage/storageManager';
 import { GitHubClient } from '../../core/git/githubClient';
 import { IGitHubConfig, IExtensionStats, IHistoricalSyncProgress } from '../../core/types';
+import { StagingModal } from './StagingModal';
 
 declare const __CLIENT_ID__: string;
 
@@ -15,6 +16,7 @@ export const WelcomeApp: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [authTab, setAuthTab] = useState<'oauth' | 'pat'>('oauth');
   const [repoMode, setRepoMode] = useState<'create' | 'link'>('create');
+  const [isStagingOpen, setIsStagingOpen] = useState(false);
 
   const [token, setToken] = useState('');
   const [username, setUsername] = useState('');
@@ -485,9 +487,26 @@ export const WelcomeApp: React.FC = () => {
                 : 'Back-fill past solutions!'}
             </span>
             {isAuthenticated && isRepoLinked && (
-              <span className="link-cyan" onClick={handleReadmeSync} style={{ cursor: 'pointer', fontSize: 13, opacity: syncingReadme ? 0.6 : 1 }}>
-                {syncingReadme ? 'Syncing Root README...' : 'Rebuild Root README 🔄'}
-              </span>
+              <>
+                <span
+                  className="link-cyan"
+                  onClick={() => setIsStagingOpen(true)}
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#f97316',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  Interactive Staging & PR Studio 🚀
+                </span>
+                <span className="link-cyan" onClick={handleReadmeSync} style={{ cursor: 'pointer', fontSize: 13, opacity: syncingReadme ? 0.6 : 1 }}>
+                  {syncingReadme ? 'Syncing Root README...' : 'Rebuild Root README 🔄'}
+                </span>
+              </>
             )}
           </div>
           {syncProgress.status === 'completed' && (
@@ -497,6 +516,14 @@ export const WelcomeApp: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Staging & PR Review Studio Modal */}
+      <StagingModal
+        isOpen={isStagingOpen}
+        onClose={() => setIsStagingOpen(false)}
+        baseBranch={branch || 'main'}
+        onSyncComplete={loadConfig}
+      />
 
       {/* Footer Link */}
       <a

@@ -53,6 +53,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (type === 'FETCH_STAGING_SUBMISSIONS') {
+    HistoricalSyncOrchestrator.fetchStagingList()
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (type === 'SYNC_SELECTED_SUBMISSIONS') {
+    const { submissions, options } = message;
+    HistoricalSyncOrchestrator.syncSelectedSubmissions(submissions, options)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (type === 'GET_HISTORICAL_SYNC_STATUS') {
     sendResponse({ progress: HistoricalSyncOrchestrator.getProgress() });
     return false;
