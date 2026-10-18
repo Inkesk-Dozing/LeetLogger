@@ -2,7 +2,6 @@ import {
   IGitHubConfig,
   ICommitFile,
   ICommitResult,
-  ICommitAuthor,
   IBatchCommitItem,
   IBatchCommitResult,
 } from '../types/git';
@@ -40,7 +39,10 @@ export class GitHubClient {
       const res = await fetch(this.baseUrl, { headers: this.headers });
       if (!res.ok) {
         if (res.status === 404) {
-          return { success: false, error: `Repository '${this.config.repository}' not found under '${this.config.username}'. You can create it using the setup options.` };
+          return {
+            success: false,
+            error: `Repository '${this.config.repository}' not found under '${this.config.username}'. You can create it using the setup options.`,
+          };
         }
         if (res.status === 401) {
           return { success: false, error: 'Invalid GitHub Personal Access Token or OAuth credentials.' };
@@ -56,10 +58,12 @@ export class GitHubClient {
   /**
    * Creates a new GitHub repository for the authenticated user.
    */
-  public static async createRepository(token: string, repoName: string): Promise<{ success: boolean; repoName?: string; error?: string }> {
+  public static async createRepository(
+    token: string,
+    repoName: string
+  ): Promise<{ success: boolean; repoName?: string; error?: string }> {
     try {
-      const url = 'https://api.github.com/user/repos';
-      const res = await fetch(url, {
+      const res = await fetch('https://api.github.com/user/repos', {
         method: 'POST',
         headers: {
           Authorization: `token ${token}`,
@@ -76,87 +80,167 @@ export class GitHubClient {
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        return { success: false, error: errData.message || `Failed to create repository: ${res.statusText}` };
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 422 && data.errors?.[0]?.message?.includes('already exists')) {
+          return { success: true, repoName };
+        }
+        return { success: false, error: data.message || `Failed to create repository: ${res.statusText}` };
       }
 
-      const data = await res.json();
-      return { success: true, repoName: data.name };
+      const repo = await res.json();
+      return { success: true, repoName: repo.name };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Error creating repository.' };
+      return { success: false, error: err.message || 'Failed to create repository.' };
     }
   }
 
   /**
-   * Scans existing repository tree to map all file paths.
+   * Recursively fetches all tree file paths currently committed to target branch.
    */
-  public async getExistingRepoTree(): Promise<Set<string>> {
+  public async getExistingRepoTree(branchName?: string): Promise<Set<string>> {
+    const targetBranch = branchName || this.config.branch || 'main';
     const paths = new Set<string>();
     try {
-      const url = `${this.baseUrl}/git/trees/${this.config.branch}?recursive=1`;
-      const res = await fetch(url, { headers: this.headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.tree && Array.isArray(data.tree)) {
-          data.tree.forEach((item: { path: string }) => paths.add(item.path));
+      const treeUrl = `${this.baseUrl}/git/trees/${targetBranch}?recursive=1`;
+      const res = await this.fetchWithRetry(treeUrl, { headers: this.headers });
+      if (!res.ok) {
+        console.warn(`[LeetLogger Git] Tree fetch returned HTTP ${res.status} for branch '${targetBranch}'.`);
+        return paths;
+      }
+      const data = await res.json();
+      if (data && Array.isArray(data.tree)) {
+        for (const item of data.tree) {
+          if (item.path) {
+            paths.add(item.path);
+          }
         }
       }
     } catch (err) {
-      console.warn('Failed to fetch existing repo tree:', err);
+      console.warn('[LeetLogger Git] Error fetching existing repository tree:', err);
     }
     return paths;
   }
 
   /**
-   * Fetches latest commit SHA and base tree SHA for target branch.
-   * Utilizes internal cache to bypass GitHub API replication lag during sequential commits.
+   * Fetches latest commit SHA and base tree SHA of target branch.
    */
-  private async getHeadCommit(): Promise<{ commitSha: string; treeSha: string }> {
-    if (this.lastCommitSha && this.lastTreeSha) {
+  public async getHeadCommit(branchName?: string): Promise<{ commitSha: string; treeSha: string }> {
+    const target = branchName || this.config.branch || 'main';
+    if (!branchName && this.lastCommitSha && this.lastTreeSha) {
       return { commitSha: this.lastCommitSha, treeSha: this.lastTreeSha };
     }
 
-    const refUrl = `${this.baseUrl}/git/ref/heads/${this.config.branch}`;
-    const refRes = await fetch(refUrl, { headers: this.headers });
+    const refUrl = `${this.baseUrl}/git/refs/heads/${target}`;
+    const refRes = await this.fetchWithRetry(refUrl, { headers: this.headers });
     if (!refRes.ok) {
-      throw new Error(`Failed to fetch branch ref '${this.config.branch}': ${refRes.statusText}`);
+      throw new Error(`Failed to fetch branch ref '${target}': ${refRes.statusText}`);
     }
     const refData = await refRes.json();
     const commitSha = refData.object.sha;
 
     const commitUrl = `${this.baseUrl}/git/commits/${commitSha}`;
-    const commitRes = await fetch(commitUrl, { headers: this.headers });
+    const commitRes = await this.fetchWithRetry(commitUrl, { headers: this.headers });
     if (!commitRes.ok) {
       throw new Error(`Failed to fetch commit '${commitSha}': ${commitRes.statusText}`);
     }
     const commitData = await commitRes.json();
 
-    this.lastCommitSha = commitSha;
-    this.lastTreeSha = commitData.tree.sha;
+    if (!branchName || branchName === this.config.branch) {
+      this.lastCommitSha = commitSha;
+      this.lastTreeSha = commitData.tree.sha;
+    }
 
     return { commitSha, treeSha: commitData.tree.sha };
   }
 
   /**
+   * Creates a new branch pointing to fromBranch HEAD if it doesn't already exist.
+   */
+  public async createBranch(newBranch: string, fromBranch?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const checkRes = await this.fetchWithRetry(`${this.baseUrl}/git/refs/heads/${newBranch}`, {
+        headers: this.headers,
+      });
+      if (checkRes.ok) {
+        return { success: true };
+      }
+
+      const { commitSha } = await this.getHeadCommit(fromBranch || this.config.branch || 'main');
+      const createRes = await this.fetchWithRetry(`${this.baseUrl}/git/refs`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({
+          ref: `refs/heads/${newBranch}`,
+          sha: commitSha,
+        }),
+      });
+
+      if (!createRes.ok) {
+        const data = await createRes.json().catch(() => ({}));
+        return { success: false, error: data.message || `Failed to create branch '${newBranch}': ${createRes.statusText}` };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Branch creation failed.' };
+    }
+  }
+
+  /**
+   * Opens a GitHub Pull Request between headBranch and baseBranch.
+   */
+  public async createPullRequest(
+    title: string,
+    headBranch: string,
+    baseBranch: string,
+    body: string
+  ): Promise<{ success: boolean; url?: string; number?: number; error?: string }> {
+    try {
+      const res = await this.fetchWithRetry(`${this.baseUrl}/pulls`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({
+          title,
+          head: headBranch,
+          base: baseBranch || this.config.branch || 'main',
+          body,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.message || `Failed to create PR: ${res.statusText}` };
+      }
+      return {
+        success: true,
+        url: data.html_url,
+        number: data.number,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Pull request creation failed.' };
+    }
+  }
+
+  /**
    * Commits files to GitHub using Git Data API with optional custom backdated timestamp.
-   * Employs transient locks retries and force updates to handle race-conditions robustly.
    */
   public async commitFiles(
     files: ICommitFile[],
     commitMessage: string,
-    authorTimestamp?: string
+    authorTimestamp?: string,
+    targetBranch?: string
   ): Promise<ICommitResult> {
+    const branch = targetBranch || this.config.branch || 'main';
     const retries = 3;
     let delayMs = 600;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const { commitSha: baseCommitSha, treeSha: baseTreeSha } = await this.getHeadCommit();
+        const { commitSha: baseCommitSha, treeSha: baseTreeSha } = await this.getHeadCommit(branch);
 
         // 1. Create Blobs for each file
         const treeItems = await Promise.all(
           files.map(async (file) => {
-            const blobRes = await fetch(`${this.baseUrl}/git/blobs`, {
+            const blobRes = await this.fetchWithRetry(`${this.baseUrl}/git/blobs`, {
               method: 'POST',
               headers: this.headers,
               body: JSON.stringify({
@@ -177,7 +261,7 @@ export class GitHubClient {
         );
 
         // 2. Create Tree
-        const treeRes = await fetch(`${this.baseUrl}/git/trees`, {
+        const treeRes = await this.fetchWithRetry(`${this.baseUrl}/git/trees`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify({
@@ -189,37 +273,35 @@ export class GitHubClient {
         const treeData = await treeRes.json();
 
         // 3. Create Commit
-        const newCommitRes = await fetch(`${this.baseUrl}/git/commits`, {
+        const newCommitRes = await this.fetchWithRetry(`${this.baseUrl}/git/commits`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify({
             message: commitMessage,
             tree: treeData.sha,
             parents: [baseCommitSha],
-            ...(authorTimestamp ? {
-              author: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: authorTimestamp },
-              committer: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: authorTimestamp }
-            } : {})
+            ...(authorTimestamp
+              ? {
+                  author: {
+                    name: this.config.username,
+                    email: `${this.config.username}@users.noreply.github.com`,
+                    date: authorTimestamp,
+                  },
+                  committer: {
+                    name: this.config.username,
+                    email: `${this.config.username}@users.noreply.github.com`,
+                    date: authorTimestamp,
+                  },
+                }
+              : {}),
           }),
         });
 
         if (!newCommitRes.ok) throw new Error(`Failed to create commit: ${newCommitRes.statusText}`);
         const newCommitData = await newCommitRes.json();
 
-        // 4. Update Reference with force: true to prevent locks or replication delays
-        const updateRefRes = await fetch(`${this.baseUrl}/git/refs/heads/${this.config.branch}`, {
-          method: 'PATCH',
-          headers: this.headers,
-          body: JSON.stringify({
-            sha: newCommitData.sha,
-            force: true,
-          }),
-        });
-        if (!updateRefRes.ok) throw new Error(`Failed to update branch ref: ${updateRefRes.statusText}`);
-
-        // Update internal cache to chain successive commits correctly without querying GitHub again
-        this.lastCommitSha = newCommitData.sha;
-        this.lastTreeSha = treeData.sha;
+        // 4. Update Reference
+        await this.updateBranchRef(newCommitData.sha, branch);
 
         return {
           success: true,
@@ -228,7 +310,6 @@ export class GitHubClient {
         };
       } catch (err: any) {
         console.warn(`[LeetLogger Git] Commit attempt ${attempt} failed:`, err.message || err);
-        // Invalidate cache on failure to force refetch from GitHub
         this.lastCommitSha = null;
         this.lastTreeSha = null;
 
@@ -238,7 +319,6 @@ export class GitHubClient {
             error: err.message || 'Commit execution failed.',
           };
         }
-        // Exponential back-off delay
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         delayMs *= 1.5;
       }
@@ -250,8 +330,9 @@ export class GitHubClient {
   /**
    * Updates target branch reference to point directly to a commit SHA.
    */
-  public async updateBranchRef(commitSha: string): Promise<boolean> {
-    const updateRefRes = await this.fetchWithRetry(`${this.baseUrl}/git/refs/heads/${this.config.branch}`, {
+  public async updateBranchRef(commitSha: string, branchName?: string): Promise<boolean> {
+    const target = branchName || this.config.branch || 'main';
+    const updateRefRes = await this.fetchWithRetry(`${this.baseUrl}/git/refs/heads/${target}`, {
       method: 'PATCH',
       headers: this.headers,
       body: JSON.stringify({
@@ -260,9 +341,11 @@ export class GitHubClient {
       }),
     });
     if (!updateRefRes.ok) {
-      throw new Error(`Failed to update branch ref to ${commitSha}: ${updateRefRes.statusText}`);
+      throw new Error(`Failed to update branch ref '${target}' to ${commitSha}: ${updateRefRes.statusText}`);
     }
-    this.lastCommitSha = commitSha;
+    if (!branchName || branchName === this.config.branch) {
+      this.lastCommitSha = commitSha;
+    }
     return true;
   }
 
@@ -299,15 +382,17 @@ export class GitHubClient {
    */
   public async commitBatchChain(
     items: IBatchCommitItem[],
-    onProgress?: (completed: number, total: number, lastCommitSha?: string) => Promise<void> | void
+    onProgress?: (completed: number, total: number, lastCommitSha?: string) => Promise<void> | void,
+    targetBranch?: string
   ): Promise<IBatchCommitResult> {
     if (!items || items.length === 0) {
       return { success: true, totalItems: 0, committedCount: 0 };
     }
 
-    let { commitSha: currentCommitSha, treeSha: currentTreeSha } = await this.getHeadCommit();
+    const branch = targetBranch || this.config.branch || 'main';
+    let { commitSha: currentCommitSha, treeSha: currentTreeSha } = await this.getHeadCommit(branch);
     let committedCount = 0;
-    const REF_SYNC_INTERVAL = 10; // Safe ref checkpoint interval
+    const REF_SYNC_INTERVAL = 10;
 
     try {
       for (let i = 0; i < items.length; i++) {
@@ -335,7 +420,6 @@ export class GitHubClient {
           })
         );
 
-        // Micro-delay to avoid API burst spikes
         await new Promise((r) => setTimeout(r, 80));
 
         // 2. Create Tree layered on top of current tree
@@ -358,10 +442,20 @@ export class GitHubClient {
             message: item.message,
             tree: treeData.sha,
             parents: [currentCommitSha],
-            ...(item.authorTimestamp ? {
-              author: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: item.authorTimestamp },
-              committer: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: item.authorTimestamp }
-            } : {})
+            ...(item.authorTimestamp
+              ? {
+                  author: {
+                    name: this.config.username,
+                    email: `${this.config.username}@users.noreply.github.com`,
+                    date: item.authorTimestamp,
+                  },
+                  committer: {
+                    name: this.config.username,
+                    email: `${this.config.username}@users.noreply.github.com`,
+                    date: item.authorTimestamp,
+                  },
+                }
+              : {}),
           }),
         });
         if (!newCommitRes.ok) throw new Error(`Failed to create commit: ${newCommitRes.statusText}`);
@@ -373,21 +467,22 @@ export class GitHubClient {
 
         // Periodic ref checkpoint update
         if (committedCount % REF_SYNC_INTERVAL === 0) {
-          await this.updateBranchRef(currentCommitSha);
+          await this.updateBranchRef(currentCommitSha, branch);
         }
 
         if (onProgress) {
           await onProgress(committedCount, items.length, currentCommitSha);
         }
 
-        // Pacing delay to guarantee secondary rate limit compliance
         await new Promise((r) => setTimeout(r, 120));
       }
 
-      // Final ref update to point branch head to the end of the chain
-      await this.updateBranchRef(currentCommitSha);
-      this.lastCommitSha = currentCommitSha;
-      this.lastTreeSha = currentTreeSha;
+      // Final ref update
+      await this.updateBranchRef(currentCommitSha, branch);
+      if (!targetBranch || targetBranch === this.config.branch) {
+        this.lastCommitSha = currentCommitSha;
+        this.lastTreeSha = currentTreeSha;
+      }
 
       return {
         success: true,
@@ -397,12 +492,9 @@ export class GitHubClient {
       };
     } catch (err: any) {
       console.error('[LeetLogger Git] Error during commitBatchChain:', err);
-      // Fast-forward ref up to the last successful commit sha so progress is preserved
       if (committedCount > 0 && currentCommitSha) {
         try {
-          await this.updateBranchRef(currentCommitSha);
-          this.lastCommitSha = currentCommitSha;
-          this.lastTreeSha = currentTreeSha;
+          await this.updateBranchRef(currentCommitSha, branch);
         } catch (syncErr) {
           console.error('[LeetLogger Git] Failed to sync ref after partial batch:', syncErr);
         }
@@ -417,4 +509,3 @@ export class GitHubClient {
     }
   }
 }
-
