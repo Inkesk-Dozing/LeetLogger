@@ -3,7 +3,7 @@ import { GitHubClient } from '../core/git/githubClient';
 import { LeetCodeHistoricalFetcher } from '../platform/leetcode/historicalFetcher';
 import { MarkdownFormatter } from '../core/formatters/markdownFormatter';
 import { IHistoricalSyncProgress } from '../core/types/sync';
-import { ICommitFile } from '../core/types/git';
+import { ICommitFile, IBatchCommitItem } from '../core/types/git';
 
 export class HistoricalSyncOrchestrator {
   private static currentProgress: IHistoricalSyncProgress = {
@@ -68,18 +68,13 @@ export class HistoricalSyncOrchestrator {
     this.currentProgress.totalMissing = missingSubmissions.length;
     this.currentProgress.status = 'committing';
 
-    // 5. Commit missing problems with historical backdated timestamps
-    for (let i = 0; i < missingSubmissions.length; i++) {
-      const sub = missingSubmissions[i];
-      this.currentProgress.currentProblem = `${sub.title} (${sub.language})`;
-      this.currentProgress.processedCount = i + 1;
-
+    // 5. Commit missing problems via atomic chained batch commits preserving authentic LeetCode solve dates
+    const batchItems: IBatchCommitItem[] = missingSubmissions.map((sub) => {
       const dirPath = MarkdownFormatter.getDirectoryPath(sub);
       const codeFileName = MarkdownFormatter.getCodeFileName(sub.extension);
       const readmeContent = MarkdownFormatter.formatReadme(sub, github.username);
-
-      // If README already exists in the repo tree, omit it from the commit to avoid unnecessary writes
       const readmePath = `${dirPath}/README.md`;
+
       const files: ICommitFile[] = [
         { path: `${dirPath}/${codeFileName}`, content: sub.code }
       ];
@@ -88,8 +83,6 @@ export class HistoricalSyncOrchestrator {
       }
 
       const isoTimestamp = new Date(sub.timestamp).toISOString();
-
-      // Format commit message to include metrics: Time: X ms (Y%), Space: Z MB (W%) - LeetLogger
       let commitMsg = '';
       if (sub.runtime && sub.memory) {
         const runPct = sub.runtimePercentile ? ` (${sub.runtimePercentile.toFixed(2)}%)` : '';
@@ -99,21 +92,46 @@ export class HistoricalSyncOrchestrator {
         commitMsg = `LeetCode: ${sub.problemId ? `${sub.problemId} - ` : ''}${sub.title} (${sub.language}) - LeetLogger`;
       }
 
-      const res = await github.commitFiles(files, commitMsg, isoTimestamp);
-      if (res.success) {
-        // Update local repo tree state to prevent duplicate README uploads in the same session
-        existingRepoPaths.add(readmePath);
-        existingRepoPaths.add(`${dirPath}/${codeFileName}`);
-
-        await StorageManager.recordSyncSuccess('leetcode', sub.titleSlug, res.commitSha || '', {
-          id: sub.problemId || '',
+      return {
+        files,
+        message: commitMsg,
+        authorTimestamp: isoTimestamp,
+        metadata: {
+          platform: 'leetcode',
+          titleSlug: sub.titleSlug,
+          problemId: sub.problemId || '',
           title: sub.title,
           difficulty: sub.difficulty,
           topics: sub.topics,
-        });
-      } else {
-        console.warn(`Failed to commit historical problem ${sub.title} in ${sub.language}:`, res.error);
+        },
+      };
+    });
+
+    const batchRes = await github.commitBatchChain(
+      batchItems,
+      async (completed, total, lastCommitSha) => {
+        this.currentProgress.processedCount = completed;
+        const currentSub = missingSubmissions[completed - 1];
+        if (currentSub) {
+          this.currentProgress.currentProblem = `${currentSub.title} (${currentSub.language})`;
+          const dirPath = MarkdownFormatter.getDirectoryPath(currentSub);
+          const codeFileName = MarkdownFormatter.getCodeFileName(currentSub.extension);
+          const readmePath = `${dirPath}/README.md`;
+          existingRepoPaths.add(readmePath);
+          existingRepoPaths.add(`${dirPath}/${codeFileName}`);
+
+          await StorageManager.recordSyncSuccess('leetcode', currentSub.titleSlug, lastCommitSha || '', {
+            id: currentSub.problemId || '',
+            title: currentSub.title,
+            difficulty: currentSub.difficulty,
+            topics: currentSub.topics,
+          });
+        }
       }
+    );
+
+    if (!batchRes.success) {
+      console.warn('[LeetLogger Sync] Batch commit chain encountered an issue:', batchRes.error);
     }
 
     // 6. Generate and commit/update Root README.md

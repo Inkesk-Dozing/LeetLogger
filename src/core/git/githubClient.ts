@@ -1,4 +1,11 @@
-import { IGitHubConfig, ICommitFile, ICommitResult, ICommitAuthor } from '../types/git';
+import {
+  IGitHubConfig,
+  ICommitFile,
+  ICommitResult,
+  ICommitAuthor,
+  IBatchCommitItem,
+  IBatchCommitResult,
+} from '../types/git';
 
 export class GitHubClient {
   private config: IGitHubConfig;
@@ -63,7 +70,7 @@ export class GitHubClient {
           name: repoName,
           private: true,
           auto_init: true,
-          description: 'A collection of LeetCode and competitive programming solutions - Logged using LeetLogger',
+          description: 'A collection of LeetCode solutions - Logged using LeetLogger',
           homepage: `https://github.com/Inkesk-Dozing/LeetLogger`,
         }),
       });
@@ -239,4 +246,175 @@ export class GitHubClient {
 
     return { success: false, error: 'Commit failed after maximum retries.' };
   }
+
+  /**
+   * Updates target branch reference to point directly to a commit SHA.
+   */
+  public async updateBranchRef(commitSha: string): Promise<boolean> {
+    const updateRefRes = await this.fetchWithRetry(`${this.baseUrl}/git/refs/heads/${this.config.branch}`, {
+      method: 'PATCH',
+      headers: this.headers,
+      body: JSON.stringify({
+        sha: commitSha,
+        force: true,
+      }),
+    });
+    if (!updateRefRes.ok) {
+      throw new Error(`Failed to update branch ref to ${commitSha}: ${updateRefRes.statusText}`);
+    }
+    this.lastCommitSha = commitSha;
+    return true;
+  }
+
+  /**
+   * Resilient HTTP fetcher with rate limit sensing and exponential backoff retry.
+   */
+  private async fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+    let delay = 1000;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        if (res.status === 403 || res.status === 429) {
+          const retryAfter = res.headers.get('Retry-After');
+          const waitTime = retryAfter ? parseInt(retryAfter, 10) * 1000 : delay;
+          console.warn(`[LeetLogger Git] Rate limit hit (${res.status}). Waiting ${waitTime}ms before retry...`);
+          await new Promise((r) => setTimeout(r, waitTime));
+          delay *= 2;
+          continue;
+        }
+        return res;
+      } catch (err) {
+        if (attempt === retries) throw err;
+        await new Promise((r) => setTimeout(r, delay));
+        delay *= 2;
+      }
+    }
+    return fetch(url, options);
+  }
+
+  /**
+   * Commits an array of items in an efficient Git commit chain.
+   * Reuses base tree and parent commit references, deferring branch ref updates
+   * until the end of the batch (or periodically) to bypass GitHub secondary rate limits.
+   */
+  public async commitBatchChain(
+    items: IBatchCommitItem[],
+    onProgress?: (completed: number, total: number, lastCommitSha?: string) => Promise<void> | void
+  ): Promise<IBatchCommitResult> {
+    if (!items || items.length === 0) {
+      return { success: true, totalItems: 0, committedCount: 0 };
+    }
+
+    let { commitSha: currentCommitSha, treeSha: currentTreeSha } = await this.getHeadCommit();
+    let committedCount = 0;
+    const REF_SYNC_INTERVAL = 10; // Safe ref checkpoint interval
+
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+
+        // 1. Create Blobs for the item's files
+        const treeItems = await Promise.all(
+          item.files.map(async (file) => {
+            const blobRes = await this.fetchWithRetry(`${this.baseUrl}/git/blobs`, {
+              method: 'POST',
+              headers: this.headers,
+              body: JSON.stringify({
+                content: btoa(unescape(encodeURIComponent(file.content))),
+                encoding: 'base64',
+              }),
+            });
+            if (!blobRes.ok) throw new Error(`Failed blob creation for ${file.path}`);
+            const blobData = await blobRes.json();
+            return {
+              path: file.path,
+              mode: '100644',
+              type: 'blob',
+              sha: blobData.sha,
+            };
+          })
+        );
+
+        // Micro-delay to avoid API burst spikes
+        await new Promise((r) => setTimeout(r, 80));
+
+        // 2. Create Tree layered on top of current tree
+        const treeRes = await this.fetchWithRetry(`${this.baseUrl}/git/trees`, {
+          method: 'POST',
+          headers: this.headers,
+          body: JSON.stringify({
+            base_tree: currentTreeSha,
+            tree: treeItems,
+          }),
+        });
+        if (!treeRes.ok) throw new Error(`Failed to create git tree: ${treeRes.statusText}`);
+        const treeData = await treeRes.json();
+
+        // 3. Create Commit parented to current commit
+        const newCommitRes = await this.fetchWithRetry(`${this.baseUrl}/git/commits`, {
+          method: 'POST',
+          headers: this.headers,
+          body: JSON.stringify({
+            message: item.message,
+            tree: treeData.sha,
+            parents: [currentCommitSha],
+            ...(item.authorTimestamp ? {
+              author: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: item.authorTimestamp },
+              committer: { name: this.config.username, email: `${this.config.username}@users.noreply.github.com`, date: item.authorTimestamp }
+            } : {})
+          }),
+        });
+        if (!newCommitRes.ok) throw new Error(`Failed to create commit: ${newCommitRes.statusText}`);
+        const newCommitData = await newCommitRes.json();
+
+        currentCommitSha = newCommitData.sha;
+        currentTreeSha = treeData.sha;
+        committedCount++;
+
+        // Periodic ref checkpoint update
+        if (committedCount % REF_SYNC_INTERVAL === 0) {
+          await this.updateBranchRef(currentCommitSha);
+        }
+
+        if (onProgress) {
+          await onProgress(committedCount, items.length, currentCommitSha);
+        }
+
+        // Pacing delay to guarantee secondary rate limit compliance
+        await new Promise((r) => setTimeout(r, 120));
+      }
+
+      // Final ref update to point branch head to the end of the chain
+      await this.updateBranchRef(currentCommitSha);
+      this.lastCommitSha = currentCommitSha;
+      this.lastTreeSha = currentTreeSha;
+
+      return {
+        success: true,
+        totalItems: items.length,
+        committedCount,
+        finalCommitSha: currentCommitSha,
+      };
+    } catch (err: any) {
+      console.error('[LeetLogger Git] Error during commitBatchChain:', err);
+      // Fast-forward ref up to the last successful commit sha so progress is preserved
+      if (committedCount > 0 && currentCommitSha) {
+        try {
+          await this.updateBranchRef(currentCommitSha);
+          this.lastCommitSha = currentCommitSha;
+          this.lastTreeSha = currentTreeSha;
+        } catch (syncErr) {
+          console.error('[LeetLogger Git] Failed to sync ref after partial batch:', syncErr);
+        }
+      }
+      return {
+        success: false,
+        totalItems: items.length,
+        committedCount,
+        finalCommitSha: currentCommitSha,
+        error: err.message || 'Batch commit chain failed.',
+      };
+    }
+  }
 }
+
