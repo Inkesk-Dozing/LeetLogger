@@ -746,7 +746,7 @@ export const WelcomeApp: React.FC = () => {
               <div className="tutorial-step-card">
                 <div className="tutorial-step-num">1</div>
                 <div className="tutorial-step-content">
-                  <div className="tutorial-step-heading">Click "1-Click Generate Token"</div>
+                  <div className="tutorial-step-heading">Click &quot;1-Click Generate Token&quot;</div>
                   <div className="tutorial-step-detail">
                     Our pre-configured link automatically sets the token name to <strong>LeetLogger Sync</strong> and pre-selects the required permissions: <strong>Contents (Read & write)</strong>, <strong>Pull requests (Read & write)</strong>, and <strong>Issues (Read & write)</strong> for direct commits, issue tracking, and the PR Studio.
                   </div>
@@ -759,7 +759,7 @@ export const WelcomeApp: React.FC = () => {
                 <div className="tutorial-step-content">
                   <div className="tutorial-step-heading">Generate on GitHub</div>
                   <div className="tutorial-step-detail">
-                    On GitHub's token creation page, select which repositories LeetLogger can access (or "All repositories"), scroll to the bottom, and click the green <strong>"Generate token"</strong> button.
+                    On GitHub&apos;s token creation page, select which repositories LeetLogger can access (or &quot;All repositories&quot;), scroll to the bottom, and click the green <strong>&quot;Generate token&quot;</strong> button.
                   </div>
                 </div>
               </div>
@@ -779,7 +779,7 @@ export const WelcomeApp: React.FC = () => {
               <div className="tutorial-privacy-box">
                 <div style={{ fontSize: 18 }}>🛡️</div>
                 <div>
-                  <strong>Zero-Data-Leakage Guarantee:</strong> LeetLogger operates 100% client-side with zero backend servers or proxies. Your token remains encrypted in your local browser storage and only communicates directly with GitHub's REST API.
+                  <strong>Zero-Data-Leakage Guarantee:</strong> LeetLogger operates 100% client-side with zero backend servers or proxies. Your token remains encrypted in your local browser storage and only communicates directly with GitHub&apos;s REST API.
                 </div>
               </div>
 
