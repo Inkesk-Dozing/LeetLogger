@@ -89,6 +89,15 @@ npm run build
 3. Click **Load unpacked** and select the generated `dist/` directory inside `LeetLogger`.
 4. Click the **LeetLogger** icon in your browser toolbar to link your GitHub repository and begin tracking!
 
+### 3. GitHub Authentication (100% Free & Secure)
+
+LeetLogger operates with zero intermediate servers, communicating directly from your browser to the GitHub API:
+1. Open the LeetLogger Dashboard (click extension icon -> Options).
+2. Generate a [Fine-Grained Personal Access Token (Recommended)](https://github.com/settings/personal-access-tokens/new):
+   - **Repository access**: Select **Only select repositories** (e.g. `LeetCode-Track`) or **All repositories** (if auto-creating new repos).
+   - **Repository permissions**: **Contents: Read and write** (and automatic Metadata: Read-only).
+3. Paste the `github_pat_...` token and link your repository. All credentials remain encrypted locally in your browser's `chrome.storage.local`.
+
 ---
 
 ## 📁 Repository Structure
