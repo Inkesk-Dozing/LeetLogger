@@ -5,6 +5,7 @@ node_modules/
 # Build artifacts
 dist/
 build/
+release/
 *.zip
 
 # Environment variables & secrets

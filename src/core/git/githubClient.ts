@@ -21,7 +21,7 @@ export class GitHubClient {
 
   private get headers(): Record<string, string> {
     return {
-      Authorization: `token ${this.config.accessToken}`,
+      Authorization: `Bearer ${this.config.accessToken}`,
       Accept: 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
     };
@@ -41,11 +41,11 @@ export class GitHubClient {
         if (res.status === 404) {
           return {
             success: false,
-            error: `Repository '${this.config.repository}' not found under '${this.config.username}'. You can create it using the setup options.`,
+            error: `Repository '${this.config.repository}' not found under '${this.config.username}'. If using a Fine-Grained Token, ensure this repository is explicitly granted under 'Selected repositories'.`,
           };
         }
         if (res.status === 401) {
-          return { success: false, error: 'Invalid GitHub Personal Access Token or OAuth credentials.' };
+          return { success: false, error: 'Invalid or expired GitHub Personal Access Token. Please verify or refresh your token.' };
         }
         return { success: false, error: `GitHub API error: ${res.statusText}` };
       }
@@ -66,7 +66,7 @@ export class GitHubClient {
       const res = await fetch('https://api.github.com/user/repos', {
         method: 'POST',
         headers: {
-          Authorization: `token ${token}`,
+          Authorization: `Bearer ${token}`,
           Accept: 'application/vnd.github.v3+json',
           'Content-Type': 'application/json',
         },
@@ -83,6 +83,12 @@ export class GitHubClient {
         const data = await res.json().catch(() => ({}));
         if (res.status === 422 && data.errors?.[0]?.message?.includes('already exists')) {
           return { success: true, repoName };
+        }
+        if (res.status === 403 || res.status === 404) {
+          return {
+            success: false,
+            error: `Cannot create repository via API (${data.message || res.statusText}). If using a Fine-Grained PAT scoped to 'Selected repositories', please create '${repoName}' on GitHub first and choose 'Link an Existing Repo'.`,
+          };
         }
         return { success: false, error: data.message || `Failed to create repository: ${res.statusText}` };
       }

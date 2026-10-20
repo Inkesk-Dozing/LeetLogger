@@ -156,15 +156,40 @@ export const WelcomeApp: React.FC = () => {
     setSaving(true);
     setStatusMsg(null);
 
-    const activeToken = token;
+    const activeToken = token.trim();
     if (!activeToken) {
       setSaving(false);
       setStatusMsg({ type: 'error', text: 'Please paste your GitHub Personal Access Token (PAT).' });
       return;
     }
 
+    let activeUsername = username.trim();
+    if (!activeUsername) {
+      try {
+        const userRes = await fetch('https://api.github.com/user', {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        });
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          if (userData.login) {
+            activeUsername = userData.login;
+            setUsername(activeUsername);
+          }
+        }
+      } catch (e) {
+        // Fallback to default
+      }
+    }
+
+    if (!activeUsername) {
+      activeUsername = 'user';
+    }
+
     if (repoMode === 'create') {
-      const createRes = await GitHubClient.createRepository(activeToken, repository);
+      const createRes = await GitHubClient.createRepository(activeToken, repository.trim());
       if (!createRes.success && !createRes.error?.includes('already exists')) {
         setSaving(false);
         setStatusMsg({ type: 'error', text: createRes.error || 'Failed to create repository.' });
@@ -174,7 +199,7 @@ export const WelcomeApp: React.FC = () => {
 
     const config: IGitHubConfig = {
       accessToken: activeToken,
-      username: username || 'user',
+      username: activeUsername,
       repository: repository.trim(),
       branch: branch || 'main',
     };
@@ -187,7 +212,7 @@ export const WelcomeApp: React.FC = () => {
       await StorageManager.setGitConfig(config);
       setGitConfig(config);
       setIsEditing(false);
-      setStatusMsg({ type: 'success', text: `Successfully linked ${config.username}/${repository} to LeetLogger!` });
+      setStatusMsg({ type: 'success', text: `Successfully linked ${config.username}/${repository.trim()} to LeetLogger!` });
     } else {
       setStatusMsg({ type: 'error', text: verify.error || 'Could not verify repository.' });
     }
@@ -370,26 +395,54 @@ export const WelcomeApp: React.FC = () => {
                 </div>
 
                 <form onSubmit={handlePatSetup} style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'left' }}>
-                  <div>
+                  <div
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.08)',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                      fontSize: 12,
+                      color: '#bae6fd',
+                      lineHeight: 1.5,
+                    }}
+                  >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <label style={{ fontSize: 12, color: '#a1a1aa' }}>
-                        Paste Your Personal Access Token (PAT)
-                      </label>
-                      <a
-                        href="https://github.com/settings/tokens/new?scopes=repo&description=LeetLogger"
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ fontSize: 12, color: '#f97316', textDecoration: 'underline' }}
-                      >
-                        Generate Token (repo scope) ↗
-                      </a>
+                      <strong style={{ color: '#ffffff' }}>🔒 Least-Privilege Security:</strong>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <a
+                          href="https://github.com/settings/personal-access-tokens/new"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#38bdf8', fontWeight: 600, textDecoration: 'underline' }}
+                        >
+                          Generate Fine-Grained PAT ↗
+                        </a>
+                        <span style={{ color: '#64748b' }}>|</span>
+                        <a
+                          href="https://github.com/settings/tokens/new?scopes=repo&description=LeetLogger"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#94a3b8', textDecoration: 'underline' }}
+                        >
+                          Classic PAT ↗
+                        </a>
+                      </div>
                     </div>
+                    <div>
+                      Required permissions: <strong>Repository permissions → Contents: Read and write</strong> (and Metadata: Read-only).
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 12, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
+                      Paste Your Personal Access Token (PAT)
+                    </label>
                     <input
                       type="password"
                       className="input-field"
                       value={token}
                       onChange={(e) => setToken(e.target.value)}
-                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                      placeholder="github_pat_xxxxxxxxxxxxxxxxxxxx (Recommended) or ghp_xxxxxxxx"
                       required
                     />
                   </div>
@@ -419,14 +472,15 @@ export const WelcomeApp: React.FC = () => {
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div>
-                      <label style={{ fontSize: 12, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>Your GitHub Username</label>
+                      <label style={{ fontSize: 12, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
+                        GitHub Username <span style={{ color: '#71717a' }}>(auto-detected if blank)</span>
+                      </label>
                       <input
                         type="text"
                         className="input-field"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
-                        placeholder="Inkesk-Dozing"
-                        required
+                        placeholder="e.g. Inkesk-Dozing"
                       />
                     </div>
                     <div>
