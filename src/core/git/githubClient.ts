@@ -227,6 +227,39 @@ export class GitHubClient {
   }
 
   /**
+   * Creates a GitHub Issue in the repository.
+   */
+  public async createIssue(
+    title: string,
+    body: string,
+    labels?: string[]
+  ): Promise<{ success: boolean; url?: string; number?: number; error?: string }> {
+    try {
+      const res = await this.fetchWithRetry(`${this.baseUrl}/issues`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({
+          title,
+          body,
+          labels: labels && labels.length > 0 ? labels : ['leetcode', 'solution'],
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.message || `Failed to create Issue: ${res.statusText}` };
+      }
+      return {
+        success: true,
+        url: data.html_url,
+        number: data.number,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Issue creation failed.' };
+    }
+  }
+
+  /**
    * Commits files to GitHub using Git Data API with optional custom backdated timestamp.
    */
   public async commitFiles(

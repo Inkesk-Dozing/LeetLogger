@@ -6,6 +6,7 @@ export interface IGitHubConfig {
   username: string;
   repository: string; // e.g. "LeetCode-Solutions"
   branch: string; // default "main"
+  syncWorkflow?: 'direct' | 'pr_issue'; // 'direct' = direct commit to main, 'pr_issue' = Issue -> Branch -> Commit -> PR
 }
 
 export interface ICommitAuthor {
