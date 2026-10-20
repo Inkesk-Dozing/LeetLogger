@@ -30,8 +30,8 @@ function loadEnv() {
 }
 
 const loadedEnv = loadEnv();
-const githubClientId = process.env.LEETLOGGER_CLIENT_ID || process.env.GITHUB_CLIENT_ID || loadedEnv.LEETLOGGER_CLIENT_ID || loadedEnv.GITHUB_CLIENT_ID || '0114dd35b156d4729fac';
-const githubClientSecret = process.env.LEETLOGGER_CLIENT_SECRET || process.env.GITHUB_CLIENT_SECRET || loadedEnv.LEETLOGGER_CLIENT_SECRET || loadedEnv.GITHUB_CLIENT_SECRET || 'cfc3301d9745530bf1b31e92528ad9c31fd3f995';
+// Public OAuth Client ID (safe to distribute to public client as per RFC 6749)
+const githubClientId = process.env.LEETLOGGER_CLIENT_ID || process.env.GITHUB_CLIENT_ID || loadedEnv.LEETLOGGER_CLIENT_ID || loadedEnv.GITHUB_CLIENT_ID || 'Ov23libeIlT8ePmShcl3';
 
 export default {
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
@@ -74,11 +74,8 @@ export default {
     new webpack.DefinePlugin({
       'process.env': JSON.stringify({}),
       'process.env.LEETLOGGER_CLIENT_ID': JSON.stringify(githubClientId),
-      'process.env.LEETLOGGER_CLIENT_SECRET': JSON.stringify(githubClientSecret),
       'process.env.GITHUB_CLIENT_ID': JSON.stringify(githubClientId),
-      'process.env.GITHUB_CLIENT_SECRET': JSON.stringify(githubClientSecret),
       '__CLIENT_ID__': JSON.stringify(githubClientId),
-      '__CLIENT_SECRET__': JSON.stringify(githubClientSecret),
     }),
     new CopyPlugin({
       patterns: [
