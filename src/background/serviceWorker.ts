@@ -159,6 +159,50 @@ async function handleSubmission(payload: ISubmissionPayload) {
   ];
 
   const github = new GitHubClient(gitConfig);
+  const baseBranch = gitConfig.branch || 'main';
+  let targetBranch = baseBranch;
+  let issueNumber: number | undefined;
+
+  // Execute full automated Issue -> Branch -> Commit -> PR lifecycle if configured
+  if (gitConfig.syncWorkflow === 'pr_issue') {
+    try {
+      const issueTitle = `[Solve] ${payload.problemId ? `${payload.problemId}. ` : ''}${payload.title}`;
+      let issueBody = `## Problem Details\n\n`;
+      issueBody += `- **Platform**: ${payload.platform.toUpperCase()}\n`;
+      if (payload.problemId) issueBody += `- **Problem ID**: ${payload.problemId}\n`;
+      issueBody += `- **Difficulty**: ${payload.difficulty}\n`;
+      if (payload.topics && payload.topics.length > 0) {
+        issueBody += `- **Topics**: ${payload.topics.join(', ')}\n`;
+      }
+      if (payload.runtime || payload.memory) {
+        issueBody += `- **Performance**: Runtime: ${payload.runtime || 'N/A'}, Space: ${payload.memory || 'N/A'}\n`;
+      }
+      if (payload.questionContent) {
+        issueBody += `\n### Problem Description\n\n${payload.questionContent}\n`;
+      }
+      issueBody += `\n---\n_Issue automatically opened by [LeetLogger](https://github.com/Inkesk-Dozing/LeetLogger)._\n`;
+
+      const labels = ['leetcode', 'solution', payload.difficulty.toLowerCase()];
+      const issueRes = await github.createIssue(issueTitle, issueBody, labels);
+      if (issueRes.success && issueRes.number) {
+        issueNumber = issueRes.number;
+        console.log(`[LeetLogger Background] Issue #${issueNumber} created for ${payload.title}`);
+      }
+    } catch (e) {
+      console.warn('[LeetLogger Background] Issue creation skipped or failed:', e);
+    }
+
+    // Create a dedicated branch for the issue
+    const branchSuffix = issueNumber ? `issue-${issueNumber}` : `${Date.now()}`;
+    const newBranch = `solve/${branchSuffix}-${payload.titleSlug}`;
+    const branchRes = await github.createBranch(newBranch, baseBranch);
+    if (branchRes.success) {
+      targetBranch = newBranch;
+    } else {
+      console.warn(`[LeetLogger Background] Branch creation failed (${branchRes.error}), committing to ${baseBranch}`);
+      targetBranch = baseBranch;
+    }
+  }
 
   // Match LeetHub's detailed performance format in commit message: Time: X ms (Y%), Space: Z MB (W%) - LeetLogger
   let commitMsg = '';
@@ -170,8 +214,33 @@ async function handleSubmission(payload: ISubmissionPayload) {
     commitMsg = `${payload.platform.toUpperCase()}: ${payload.problemId ? `${payload.problemId} - ` : ''}${payload.title} - LeetLogger`;
   }
 
-  const res = await github.commitFiles(files, commitMsg);
+  const res = await github.commitFiles(files, commitMsg, undefined, targetBranch);
   if (res.success) {
+    // If branched for PR workflow, raise Pull Request targeting baseBranch
+    if (gitConfig.syncWorkflow === 'pr_issue' && targetBranch !== baseBranch) {
+      try {
+        let prBody = `## Solution Submission: ${payload.title}\n\n`;
+        if (issueNumber) {
+          prBody += `Closes #${issueNumber}\n\n`;
+        }
+        prBody += `### Performance & Details\n`;
+        prBody += `- **Difficulty**: ${payload.difficulty}\n`;
+        if (payload.runtime) prBody += `- **Runtime**: ${payload.runtime}\n`;
+        if (payload.memory) prBody += `- **Memory**: ${payload.memory}\n`;
+        prBody += `\n---\n_Automated PR submission powered by [LeetLogger](https://github.com/Inkesk-Dozing/LeetLogger)._\n`;
+
+        const prTitle = `[Solve] ${payload.problemId ? `${payload.problemId}. ` : ''}${payload.title}`;
+        const prRes = await github.createPullRequest(prTitle, targetBranch, baseBranch, prBody);
+        if (prRes.success) {
+          console.log(`[LeetLogger Background] Pull Request #${prRes.number} opened: ${prRes.url}`);
+        } else {
+          console.warn('[LeetLogger Background] Pull Request creation failed:', prRes.error);
+        }
+      } catch (e) {
+        console.warn('[LeetLogger Background] Pull Request creation exception:', e);
+      }
+    }
+
     await StorageManager.recordSyncSuccess(payload.platform, payload.titleSlug, res.commitSha || '', {
       id: payload.problemId || '',
       title: payload.title,
@@ -180,7 +249,7 @@ async function handleSubmission(payload: ISubmissionPayload) {
     });
     updateBadge('OK');
 
-    // Automatically update root README.md index
+    // Automatically update root README.md index on base branch
     try {
       await HistoricalSyncOrchestrator.syncRootReadme(github);
     } catch (e) {
