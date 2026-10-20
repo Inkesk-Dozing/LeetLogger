@@ -14,7 +14,7 @@ export const WelcomeApp: React.FC = () => {
   const [stats, setStats] = useState<IExtensionStats>({ totalSynced: 0, leetcodeCount: 0, gfgCount: 0 });
   const [solvedStats, setSolvedStats] = useState({ easy: 0, medium: 0, hard: 0 });
   const [isEditing, setIsEditing] = useState(false);
-  const [authTab, setAuthTab] = useState<'oauth' | 'pat'>('oauth');
+  const [authTab, setAuthTab] = useState<'oauth' | 'pat'>('pat');
   const [repoMode, setRepoMode] = useState<'create' | 'link'>('create');
   const [isStagingOpen, setIsStagingOpen] = useState(false);
 
@@ -360,11 +360,30 @@ export const WelcomeApp: React.FC = () => {
               </div>
             ) : (
               <div>
+                <div style={{ marginBottom: 16, textAlign: 'center' }}>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, color: '#f8fafc', marginBottom: 6 }}>
+                    Connect with Personal Access Token
+                  </h3>
+                  <p style={{ fontSize: 13, color: '#a1a1aa', lineHeight: 1.5, margin: 0 }}>
+                    Direct client-to-GitHub sync with 100% free lifetime operation (zero servers, zero proxies).
+                  </p>
+                </div>
+
                 <form onSubmit={handlePatSetup} style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'left' }}>
                   <div>
-                    <label style={{ fontSize: 12, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
-                      Paste Your Personal Access Token (PAT)
-                    </label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label style={{ fontSize: 12, color: '#a1a1aa' }}>
+                        Paste Your Personal Access Token (PAT)
+                      </label>
+                      <a
+                        href="https://github.com/settings/tokens/new?scopes=repo&description=LeetLogger"
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ fontSize: 12, color: '#f97316', textDecoration: 'underline' }}
+                      >
+                        Generate Token (repo scope) ↗
+                      </a>
+                    </div>
                     <input
                       type="password"
                       className="input-field"

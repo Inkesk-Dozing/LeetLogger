@@ -1,66 +1,16 @@
 console.log('[LeetLogger] GitHub OAuth Content Script active on:', window.location.href);
 
-// Fallback to verified OAuth Client Credentials if custom env is absent
-const CLIENT_ID = 'Ov23libeIlT8ePmShcl3';
-const CLIENT_SECRET = '28af7ac9d44717eca8e08bce9f77b3a50f7626e7';
+// Note: Client secrets must never be embedded in client-side bundles (CWE-312).
+// LeetLogger operates on a 100% zero-cost architecture using direct GitHub Personal Access Tokens (PAT).
 
-async function performOAuthExchange(code: string) {
-  try {
-    console.log('[LeetLogger Content] Exchanging code for token...');
-    const formData = new FormData();
-    formData.append('client_id', CLIENT_ID);
-    formData.append('client_secret', CLIENT_SECRET);
-    formData.append('code', code);
-
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-      },
-      body: formData,
-    });
-
-    if (!tokenRes.ok) {
-      throw new Error(`Token exchange failed: ${tokenRes.statusText}`);
-    }
-
-    const tokenData = await tokenRes.json();
-    const token = tokenData.access_token;
-    if (!token) {
-      throw new Error(tokenData.error_description || 'OAuth token missing in response.');
-    }
-
-    console.log('[LeetLogger Content] Token fetched. Fetching user profile...');
-
-    const userRes = await fetch('https://api.github.com/user', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.v3+json',
-      },
-    });
-
-    if (!userRes.ok) {
-      const errBody = await userRes.text().catch(() => '');
-      throw new Error(`Failed to fetch user profile: ${userRes.status} - ${errBody}`);
-    }
-
-    const user = await userRes.json();
-    const username = user.login;
-
-    console.log('[LeetLogger Content] Successfully authenticated:', username);
-
-    chrome.runtime.sendMessage({
-      type: 'OAUTH_SUCCESS',
-      token,
-      username,
-    });
-  } catch (err: any) {
-    console.error('[LeetLogger Content] OAuth Exchange error:', err);
-    chrome.runtime.sendMessage({
-      type: 'OAUTH_FAILURE',
-      error: err.message || String(err),
-    });
-  }
+async function handleOAuthCode(code: string) {
+  console.log('[LeetLogger Content] GitHub authorization code received:', code ? 'present' : 'none');
+  console.info('[LeetLogger Content] To prevent client secret leakage (CWE-312), LeetLogger enforces direct PAT authentication.');
+  
+  chrome.runtime.sendMessage({
+    type: 'OAUTH_FAILURE',
+    error: 'Direct client-side OAuth secret exchange is disabled to prevent credential leakage (CWE-312). Please connect securely using a GitHub Personal Access Token (PAT) in settings.',
+  });
 }
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -71,7 +21,7 @@ if (code && window.location.host === 'github.com') {
     chrome.storage.local.get('leetlogger_pipe', (data) => {
       if (data && data.leetlogger_pipe) {
         chrome.storage.local.remove('leetlogger_pipe');
-        performOAuthExchange(code);
+        handleOAuthCode(code);
       }
     });
   }
